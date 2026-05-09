@@ -10,6 +10,7 @@
         import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
+        // Firebase 配置
         const firebaseConfig = {
             apiKey: "AIzaSyAVMcb60Q11e-U4xAmaylKVHJZXPpBjIBo",
             authDomain: "calendar-ceb9e.firebaseapp.com",
@@ -26,10 +27,21 @@
         const provider = new GoogleAuthProvider();
 
         window.currentUser = null;
+        let isDataLoaded = false; // 新增：数据加载状态锁
 
-        // 登录/登出
+        // 登录/登出逻辑
         window.login = () => signInWithPopup(auth, provider).catch(console.error);
-        window.logout = () => signOut(auth);
+        window.logout = () => {
+            signOut(auth).then(() => {
+                location.reload(); // 登出后刷新页面重置状态
+            });
+        };
+
+        // 账户菜单切换
+        window.toggleUserMenu = () => {
+            const menu = document.getElementById('user-menu');
+            menu.classList.toggle('hidden');
+        };
 
         onAuthStateChanged(auth, async (user) => {
             const loginBtn = document.getElementById('login-section');
@@ -38,8 +50,15 @@
                 window.currentUser = user;
                 loginBtn.classList.add('hidden');
                 appContent.classList.remove('hidden');
+                
+                // 更新用户信息显示
                 document.getElementById('user-avatar').src = user.photoURL;
+                document.getElementById('user-name').innerText = user.displayName;
+                document.getElementById('user-email').innerText = user.email;
+
+                // 核心：先从云端同步
                 await syncFromCloud();
+                isDataLoaded = true; // 标记数据已就绪
             } else {
                 window.currentUser = null;
                 loginBtn.classList.remove('hidden');
@@ -47,97 +66,146 @@
             }
         });
 
+        // 同步至云端 (带状态保护)
         window.syncToCloud = async () => {
-            if (!window.currentUser) return;
-            await setDoc(doc(db, "users", window.currentUser.uid), { events: window.events }, { merge: true });
+            if (!window.currentUser || !isDataLoaded) return;
+            try {
+                await setDoc(doc(db, "users", window.currentUser.uid), { 
+                    events: window.events,
+                    lastUpdated: new Date().getTime()
+                }, { merge: true });
+            } catch (e) {
+                console.error("Sync Failed:", e);
+            }
         };
 
+        // 从云端获取
         async function syncFromCloud() {
-            const docSnap = await getDoc(doc(db, "users", window.currentUser.uid));
-            if (docSnap.exists()) window.events = docSnap.data().events || [];
-            window.renderAll();
+            try {
+                const docSnap = await getDoc(doc(db, "users", window.currentUser.uid));
+                if (docSnap.exists()) {
+                    window.events = docSnap.data().events || [];
+                }
+                window.renderAll();
+            } catch (e) {
+                console.error("Load Failed:", e);
+            }
         }
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', (e) => {
+            const menu = document.getElementById('user-menu');
+            const avatar = document.getElementById('user-avatar');
+            if (menu && avatar && !avatar.contains(e.target) && !menu.contains(e.target)) {
+                menu.classList.add('hidden');
+            }
+        });
     </script>
     <style>
-        body { background-color: #000; color: #fff; font-family: -apple-system, sans-serif; -webkit-tap-highlight-color: transparent; }
-        .glass-card { background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; }
-        .view-btn { padding: 4px 16px; border-radius: 999px; font-size: 12px; color: #71717a; }
+        body { background-color: #000; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+        .glass-card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 16px; }
+        .view-btn { padding: 6px 18px; border-radius: 999px; font-size: 12px; color: #71717a; transition: all 0.2s; }
         .view-btn.active { background: white; color: black; font-weight: 600; }
-        .input-field { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 12px; color: white; width: 100%; outline: none; }
-        .label-text { font-size: 10px; font-weight: 700; color: #52525b; text-transform: uppercase; margin-bottom: 6px; display: block; }
-        .color-dot { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; }
-        .color-dot.selected { border-color: white; transform: scale(1.1); }
+        .input-field { background: #121214; border: 1px solid #27272a; border-radius: 12px; padding: 14px; color: white; width: 100%; outline: none; transition: border-color 0.2s; }
+        .input-field:focus { border-color: #52525b; }
+        .label-text { font-size: 10px; font-weight: 800; color: #52525b; text-transform: uppercase; margin-bottom: 8px; display: block; letter-spacing: 0.05em; }
+        .color-dot { width: 32px; height: 32px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; transition: transform 0.2s; }
+        .color-dot.selected { border-color: white; transform: scale(1.15); }
         .no-scrollbar::-webkit-scrollbar { display: none; }
+        .menu-transition { transition: opacity 0.2s, transform 0.2s; }
     </style>
 </head>
 <body class="max-w-md mx-auto min-h-screen flex flex-col overflow-hidden">
 
+    <!-- 登录界面 -->
     <div id="login-section" class="flex-1 flex flex-col items-center justify-center p-10 text-center">
-        <div class="w-16 h-16 bg-white rounded-full mb-8 flex items-center justify-center">
-            <div class="w-8 h-8 border-4 border-black rounded-sm"></div>
+        <div class="w-20 h-20 bg-white rounded-3xl mb-8 flex items-center justify-center rotate-3">
+            <div class="w-10 h-10 border-[5px] border-black rounded-md"></div>
         </div>
-        <h1 class="text-3xl font-bold mb-2 tracking-tighter">Easy Calendar</h1>
-        <p class="text-zinc-500 text-sm mb-10">Cloud Synchronized</p>
-        <button onclick="login()" class="flex items-center gap-3 bg-white text-black px-8 py-4 rounded-full font-bold shadow-lg">
-            <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" class="w-5 h-5">
+        <h1 class="text-4xl font-bold mb-3 tracking-tighter italic">Easy Calendar</h1>
+        <p class="text-zinc-500 text-sm mb-12">Seamless Cloud Sync</p>
+        <button onclick="login()" class="flex items-center gap-4 bg-white text-black px-10 py-5 rounded-2xl font-bold shadow-xl hover:scale-95 transition-transform">
+            <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" class="w-6 h-6">
             Sign in with Google
         </button>
     </div>
 
+    <!-- 主应用 -->
     <div id="app-main" class="hidden flex-1 flex flex-col p-6 overflow-hidden">
-        <header class="mb-4 flex justify-between items-start">
+        <header class="mb-6 flex justify-between items-start">
             <div>
-                <h1 id="live-clock" class="text-4xl font-bold tracking-tight">00:00</h1>
-                <p id="live-date" class="text-zinc-500 uppercase tracking-widest text-[10px] mt-1"></p>
+                <h1 id="live-clock" class="text-5xl font-bold tracking-tighter">00:00</h1>
+                <p id="live-date" class="text-zinc-500 uppercase tracking-[0.2em] text-[10px] mt-2 font-medium"></p>
             </div>
-            <div class="flex flex-col items-end gap-3">
-                <img id="user-avatar" onclick="logout()" class="w-8 h-8 rounded-full border border-zinc-800 cursor-pointer shadow-md">
-                <div class="flex bg-zinc-900/50 p-1 rounded-full border border-zinc-800">
+            <div class="flex flex-col items-end gap-4">
+                <!-- 账户菜单容器 -->
+                <div class="relative">
+                    <img id="user-avatar" onclick="toggleUserMenu()" class="w-10 h-10 rounded-full border-2 border-zinc-800 cursor-pointer hover:border-zinc-500 transition-all shadow-lg">
+                    <div id="user-menu" class="hidden absolute right-0 mt-3 w-56 glass-card bg-zinc-900/95 backdrop-blur-xl border border-zinc-800 shadow-2xl z-[60] p-2 overflow-hidden">
+                        <div class="p-4 border-b border-zinc-800/50 mb-1">
+                            <p id="user-name" class="text-xs font-bold truncate"></p>
+                            <p id="user-email" class="text-[10px] text-zinc-500 truncate mt-1"></p>
+                        </div>
+                        <button onclick="logout()" class="w-full text-left px-4 py-3 text-red-400 text-xs font-medium hover:bg-white/5 rounded-xl transition-colors">
+                            Sign Out
+                        </button>
+                    </div>
+                </div>
+                <div class="flex bg-zinc-900/80 p-1 rounded-full border border-zinc-800 backdrop-blur-sm">
                     <button onclick="switchView('calendar')" id="btn-cal" class="view-btn">Calendar</button>
                     <button onclick="switchView('timeline')" id="btn-time" class="view-btn active">Timeline</button>
                 </div>
             </div>
         </header>
 
-        <main class="flex-1 overflow-y-auto no-scrollbar pb-20">
-            <section id="monthly-container" class="hidden">
-                <div class="flex justify-between items-center mb-6 px-2">
-                    <button onclick="changeMonth(-1)" class="text-zinc-500 text-xl">&lt;</button>
-                    <h3 id="cal-month-title" class="text-sm font-bold tracking-widest uppercase"></h3>
-                    <button onclick="changeMonth(1)" class="text-zinc-500 text-xl">&gt;</button>
+        <main class="flex-1 overflow-y-auto no-scrollbar pb-24">
+            <!-- 日历视图 -->
+            <section id="monthly-container" class="hidden animate-in fade-in duration-300">
+                <div class="flex justify-between items-center mb-8 px-2">
+                    <button onclick="changeMonth(-1)" class="text-zinc-500 hover:text-white p-2">←</button>
+                    <h3 id="cal-month-title" class="text-xs font-black tracking-[0.3em] uppercase text-zinc-400"></h3>
+                    <button onclick="changeMonth(1)" class="text-zinc-500 hover:text-white p-2">→</button>
                 </div>
-                <div id="monthly-grid" class="grid grid-cols-7 gap-y-1 text-center"></div>
+                <div id="monthly-grid" class="grid grid-cols-7 gap-y-2 text-center text-zinc-500"></div>
             </section>
-            <section id="timeline-container">
-                <div class="flex justify-between mb-8 px-1" id="weekly-strip"></div>
-                <div id="event-list" class="space-y-6 relative border-l border-zinc-900 ml-3 pl-7"></div>
+
+            <!-- 时间轴视图 -->
+            <section id="timeline-container" class="animate-in slide-in-from-bottom-4 duration-500">
+                <div class="flex justify-between mb-10 px-1" id="weekly-strip"></div>
+                <div id="event-list" class="space-y-6 relative border-l border-zinc-900/50 ml-3 pl-8"></div>
             </section>
         </main>
-        <button onclick="openModal()" class="fixed bottom-8 right-8 bg-white text-black w-14 h-14 rounded-full font-bold shadow-2xl flex items-center justify-center text-2xl z-40">+</button>
+
+        <button onclick="openModal()" class="fixed bottom-10 right-8 bg-white text-black w-14 h-14 rounded-2xl font-bold shadow-2xl flex items-center justify-center text-2xl z-40 hover:scale-110 active:scale-90 transition-all">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        </button>
     </div>
 
-    <!-- Modal -->
-    <div id="modal" class="fixed inset-0 bg-black/90 backdrop-blur-md hidden flex items-center justify-center p-6 z-50">
-        <div class="bg-zinc-900 w-full rounded-[32px] p-8 border border-zinc-800">
-            <h2 class="text-2xl font-bold mb-6">Schedule</h2>
+    <!-- 弹窗 -->
+    <div id="modal" class="fixed inset-0 bg-black/60 backdrop-blur-md hidden flex items-end sm:items-center justify-center p-4 z-[100]">
+        <div class="bg-[#121214] w-full max-w-sm rounded-[32px] p-8 border border-zinc-800 shadow-2xl animate-in slide-in-from-bottom-10">
+            <h2 class="text-xl font-bold mb-8 tracking-tight">New Plan</h2>
             <input type="hidden" id="edit-id">
-            <div class="space-y-5">
+            <div class="space-y-6">
                 <div><label class="label-text">Date</label><input type="date" id="in-date" class="input-field"></div>
-                <div><label class="label-text">Title</label><input type="text" id="in-title" class="input-field" placeholder="What's next?"></div>
+                <div><label class="label-text">Activity</label><input type="text" id="in-title" class="input-field" placeholder="Doing what?"></div>
                 <div class="flex gap-4">
                     <div class="flex-1"><label class="label-text">Start</label><input type="time" id="in-start" class="input-field"></div>
                     <div class="flex-1"><label class="label-text">End</label><input type="time" id="in-end" class="input-field"></div>
                 </div>
-                <div class="flex gap-3 pt-2" id="color-picker">
+                <div class="flex gap-4 pt-2" id="color-picker">
                     <div class="color-dot bg-zinc-600 selected" data-color="#52525b"></div>
-                    <div class="color-dot bg-blue-600" data-color="#2563eb"></div>
-                    <div class="color-dot bg-rose-600" data-color="#e11d48"></div>
+                    <div class="color-dot bg-blue-500" data-color="#3b82f6"></div>
+                    <div class="color-dot bg-rose-500" data-color="#f43f5e"></div>
+                    <div class="color-dot bg-emerald-500" data-color="#10b981"></div>
                 </div>
             </div>
-            <div class="mt-10 flex flex-col gap-3">
-                <button onclick="saveEvent()" class="w-full bg-white text-black py-4 rounded-2xl font-bold">Confirm</button>
-                <button id="del-btn" onclick="deleteEvent()" class="text-red-500 text-xs hidden">Delete</button>
-                <button onclick="closeModal()" class="text-zinc-500 text-sm">Cancel</button>
+            <div class="mt-12 flex flex-col gap-4">
+                <button onclick="saveEvent()" class="w-full bg-white text-black py-4 rounded-2xl font-bold hover:bg-zinc-200 transition-colors">Confirm</button>
+                <div class="flex justify-between items-center px-2">
+                    <button id="del-btn" onclick="deleteEvent()" class="text-red-500 text-[10px] font-bold uppercase tracking-widest hidden">Delete Plan</button>
+                    <button onclick="closeModal()" class="text-zinc-500 text-xs ml-auto">Dismiss</button>
+                </div>
             </div>
         </div>
     </div>
@@ -170,9 +238,9 @@
             for(let i=-3; i<=3; i++) {
                 const d = new Date(selectedDate); d.setDate(selectedDate.getDate() + i);
                 const active = d.toDateString() === selectedDate.toDateString();
-                strip.innerHTML += `<div onclick="setDate('${formatDate(d)}')" class="flex flex-col items-center cursor-pointer">
-                    <span class="text-[8px] text-zinc-600 mb-1 font-bold">${d.toLocaleDateString('en-US',{weekday:'short'}).charAt(0)}</span>
-                    <span class="w-8 h-8 flex items-center justify-center rounded-full text-xs ${active?'bg-white text-black font-bold':'text-zinc-500'}">${d.getDate()}</span>
+                strip.innerHTML += `<div onclick="setDate('${formatDate(d)}')" class="flex flex-col items-center cursor-pointer group">
+                    <span class="text-[9px] ${active?'text-white':'text-zinc-700'} mb-2 font-black transition-colors">${d.toLocaleDateString('en-US',{weekday:'short'}).charAt(0)}</span>
+                    <span class="w-9 h-9 flex items-center justify-center rounded-xl text-xs transition-all ${active?'bg-white text-black font-bold scale-110 shadow-lg':'text-zinc-500 hover:bg-white/5'}">${d.getDate()}</span>
                 </div>`;
             }
         }
@@ -181,12 +249,12 @@
             const list = document.getElementById('event-list');
             list.innerHTML = '';
             const dayEvents = window.events.filter(e => e.date === formatDate(selectedDate)).sort((a,b)=>a.start.localeCompare(b.start));
-            if(dayEvents.length === 0) list.innerHTML = '<p class="text-zinc-700 text-xs italic py-10">No plans for today.</p>';
+            if(dayEvents.length === 0) list.innerHTML = '<p class="text-zinc-800 text-xs italic py-12 tracking-tight">Empty space.</p>';
             dayEvents.forEach(e => {
-                list.innerHTML += `<div onclick="openModal('${e.id}')" class="relative cursor-pointer group">
-                    <div class="absolute -left-[32px] top-2 w-2 h-2 bg-white rounded-full ring-4 ring-black"></div>
-                    <p class="text-[9px] text-zinc-600 font-mono mb-1">${e.start} - ${e.end}</p>
-                    <div class="glass-card p-4 border-l-4" style="border-left-color:${e.color}">${e.title}</div>
+                list.innerHTML += `<div onclick="openModal('${e.id}')" class="relative cursor-pointer group animate-in fade-in slide-in-from-left-2">
+                    <div class="absolute -left-[37px] top-3 w-2.5 h-2.5 bg-white rounded-full border-4 border-black"></div>
+                    <p class="text-[10px] text-zinc-600 font-bold mb-2 tracking-tighter">${e.start || '--'} - ${e.end || '--'}</p>
+                    <div class="glass-card p-5 border-l-4" style="border-left-color:${e.color}">${e.title}</div>
                 </div>`;
             });
         }
@@ -194,16 +262,17 @@
         function renderCalendar() {
             const grid = document.getElementById('monthly-grid');
             document.getElementById('cal-month-title').innerText = viewDate.toLocaleDateString('en-US',{month:'long', year:'numeric'});
-            grid.innerHTML = '<span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>'.split('</span>').map(s=>`<span class="text-[10px] text-zinc-600 font-bold mb-4">${s}</span>`).join('');
+            grid.innerHTML = 'SMTWTFS'.split('').map(s=>`<span class="text-[10px] font-bold mb-6">${s}</span>`).join('');
             const first = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay();
             const days = new Date(viewDate.getFullYear(), viewDate.getMonth()+1, 0).getDate();
             for(let i=0; i<first; i++) grid.innerHTML += '<div></div>';
             for(let d=1; d<=days; d++) {
                 const dateStr = formatDate(new Date(viewDate.getFullYear(), viewDate.getMonth(), d));
                 const hasEv = window.events.some(e => e.date === dateStr);
-                grid.innerHTML += `<div onclick="setDate('${dateStr}');switchView('timeline')" class="h-12 flex flex-col items-center justify-center cursor-pointer">
-                    <span class="text-xs ${dateStr===formatDate(selectedDate)?'bg-white text-black rounded-full w-6 h-6 flex items-center justify-center font-bold':''}">${d}</span>
-                    ${hasEv ? '<div class="w-1 h-1 bg-white rounded-full mt-1"></div>' : ''}
+                const isSelected = dateStr === formatDate(selectedDate);
+                grid.innerHTML += `<div onclick="setDate('${dateStr}');switchView('timeline')" class="h-14 flex flex-col items-center justify-center cursor-pointer group">
+                    <span class="text-xs transition-all ${isSelected?'bg-white text-black rounded-lg w-7 h-7 flex items-center justify-center font-bold shadow-lg':'text-zinc-400 group-hover:text-white'}">${d}</span>
+                    ${hasEv && !isSelected ? '<div class="w-1 h-1 bg-zinc-600 rounded-full mt-1.5"></div>' : '<div class="h-1 mt-1.5"></div>'}
                 </div>`;
             }
         }
@@ -227,22 +296,33 @@
                 editId.value = '';
                 document.getElementById('in-title').value = '';
                 document.getElementById('in-date').value = formatDate(selectedDate);
+                document.getElementById('in-start').value = '09:00';
+                document.getElementById('in-end').value = '10:00';
                 delBtn.classList.add('hidden');
             }
         };
 
         window.saveEvent = async () => {
             const id = document.getElementById('edit-id').value;
-            const data = { id: id || Date.now(), title: document.getElementById('in-title').value || "Untitled", date: document.getElementById('in-date').value, start: document.getElementById('in-start').value, end: document.getElementById('in-end').value, color: selectedColor };
+            const data = { 
+                id: id || Date.now().toString(), 
+                title: document.getElementById('in-title').value || "Unnamed Plan", 
+                date: document.getElementById('in-date').value, 
+                start: document.getElementById('in-start').value, 
+                end: document.getElementById('in-end').value, 
+                color: selectedColor 
+            };
             if(id) window.events = window.events.map(e => e.id == id ? data : e);
             else window.events.push(data);
-            window.renderAll(); closeModal();
+            window.renderAll(); 
+            closeModal();
             await window.syncToCloud();
         };
 
         window.deleteEvent = async () => {
             window.events = window.events.filter(e => e.id != document.getElementById('edit-id').value);
-            window.renderAll(); closeModal();
+            window.renderAll(); 
+            closeModal();
             await window.syncToCloud();
         };
 
@@ -253,9 +333,10 @@
             d.classList.add('selected'); selectedColor = d.dataset.color;
         });
 
+        // 实时时钟刷新
         setInterval(() => {
             const now = new Date();
-            document.getElementById('live-clock').innerText = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:true });
+            document.getElementById('live-clock').innerText = now.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', hour12:false });
             document.getElementById('live-date').innerText = now.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }).toUpperCase();
         }, 1000);
 
